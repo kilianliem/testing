@@ -260,7 +260,7 @@
             <button onclick="hideToast()" class="text-xl leading-none opacity-60 hover:opacity-100" aria-label="Dismiss notification">&times;</button>
         </div>
 
-        <!-- TAB 2 (Now First) -->
+        <!-- TAB 2 (Bank Holiday & Leave Simulator) -->
         <div id="view-holiday" class="space-y-8">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
                 <section class="card space-y-4">
@@ -388,20 +388,13 @@
                 <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-6 border-b border-slate-200 dark:border-slate-700">
                     <div>
                         <h2 class="text-lg font-bold">Annual Leave Hour Simulator</h2>
-                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Click dates or drag bank holidays directly onto the calendar.</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Click dates or drag specific in-lieu bank holidays directly onto the calendar.</p>
                     </div>
 
                     <div class="flex flex-wrap items-center gap-3">
                         <div class="flex flex-wrap items-center bg-slate-100 dark:bg-slate-700/60 p-1 rounded-xl text-xs font-semibold gap-1">
                             <span class="px-2 text-slate-500 dark:text-slate-400 uppercase">Mode:</span>
                             <button id="btn-mode-annual" onclick="setCalendarMarkMode('annual')" class="px-3 py-1.5 rounded-lg bg-brand-600 text-white">Annual Leave</button>
-                            <button id="btn-mode-holiday" onclick="setCalendarMarkMode('holiday')" class="px-3 py-1.5 rounded-lg text-slate-600 dark:text-slate-300">Bank Holiday</button>
-                            <div
-                                draggable="true"
-                                ondragstart="handleTokenDragStart(event)"
-                                class="draggable-chip px-3 py-1.5 rounded-lg bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-700"
-                                title="Drag onto a calendar day"
-                            >⋮⋮ Drag to Day</div>
                         </div>
 
                         <div class="flex items-center gap-1 bg-slate-100 dark:bg-slate-700/60 p-1 rounded-xl">
@@ -469,7 +462,7 @@
             </section>
         </div>
 
-        <!-- TAB 1 (Now Second) -->
+        <!-- TAB 1 (FlexiTime Calculator) -->
         <div id="view-flexi" class="hidden space-y-6">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
                 <div class="md:col-span-2 space-y-6">
@@ -1897,6 +1890,8 @@
         function loadHolidayHistory() {
             const container = document.getElementById('holiday-history-container');
             const holidays = readJSON('bank_holiday_records', []);
+            const selections = getLeaveCalendarSelections();
+            const usedHolidayIds = readJSON('calendar_used_holiday_ids', {});
 
             if (!holidays.length) {
                 container.innerHTML = '<p class="text-xs text-slate-400 text-center py-4">No saved bank holiday records yet.</p>';
@@ -1908,6 +1903,9 @@
             for (const item of holidays) {
                 const remaining = calendarDayNumber(item.expiryDateISO) -
                     calendarDayNumber(localDateISO());
+
+                // Check if this specific holiday is already placed on the calendar
+                const isAlreadyUsed = Object.values(usedHolidayIds).includes(item.id);
 
                 const row = document.createElement('div');
                 row.className = 'p-3 rounded-xl bg-slate-50 dark:bg-slate-700/50 border border-slate-200 dark:border-slate-600 flex flex-wrap items-center justify-between gap-3 text-xs';
@@ -1929,13 +1927,19 @@
                 controls.className = 'flex flex-wrap items-center gap-2';
 
                 const drag = document.createElement('div');
-                drag.draggable = true;
-                drag.className = 'draggable-chip px-2.5 py-1 rounded-lg bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-700 font-semibold';
-                drag.textContent = '⋮⋮ Drag to Date';
-                drag.title = 'Drag this bank holiday onto a calendar date';
-                drag.addEventListener('dragstart', event => {
-                    handleItemDragStart(event, item.id, item.name);
-                });
+                if (isAlreadyUsed) {
+                    drag.className = 'px-2.5 py-1 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-400 border border-slate-300 dark:border-slate-700 font-semibold opacity-60 cursor-not-allowed';
+                    drag.textContent = 'Already on Calendar';
+                    drag.title = 'Remove it from the calendar to use it again';
+                } else {
+                    drag.draggable = true;
+                    drag.className = 'draggable-chip px-2.5 py-1 rounded-lg bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-700 font-semibold';
+                    drag.textContent = '⋮⋮ Drag to Date';
+                    drag.title = 'Drag this bank holiday onto a calendar date';
+                    drag.addEventListener('dragstart', event => {
+                        handleItemDragStart(event, item.id, item.name);
+                    });
+                }
 
                 const status = document.createElement('span');
                 status.className = remaining < 0
@@ -1960,6 +1964,20 @@
         }
 
         function deleteHoliday(id) {
+            // Remove from calendar selections/tracking if it was placed there
+            const selections = getLeaveCalendarSelections();
+            const usedHolidayIds = readJSON('calendar_used_holiday_ids', {});
+            
+            for (const [dateISO, hid] of Object.entries(usedHolidayIds)) {
+                if (hid === id) {
+                    delete selections[dateISO];
+                    delete usedHolidayIds[dateISO];
+                }
+            }
+
+            saveLeaveCalendarSelections(selections);
+            storage.setItem('calendar_used_holiday_ids', JSON.stringify(usedHolidayIds));
+
             const holidays = readJSON('bank_holiday_records', [])
                 .filter(item => item.id !== id);
 
@@ -1973,6 +1991,17 @@
 
         function clearHolidayHistory() {
             storage.removeItem('bank_holiday_records');
+            storage.removeItem('calendar_used_holiday_ids');
+            
+            // Clear selections that were holiday in-lieu marks
+            const selections = getLeaveCalendarSelections();
+            for (const dateISO of Object.keys(selections)) {
+                if (selections[dateISO] === 'holiday') {
+                    delete selections[dateISO];
+                }
+            }
+            saveLeaveCalendarSelections(selections);
+
             loadHolidayHistory();
             updateHolidaySimulatorBadges();
             renderDynamicCalendar();
@@ -1994,9 +2023,6 @@
 
             document.getElementById('btn-mode-annual').className =
                 base + (mode === 'annual' ? 'bg-brand-600 text-white' : inactive);
-
-            document.getElementById('btn-mode-holiday').className =
-                base + (mode === 'holiday' ? 'bg-purple-600 text-white' : inactive);
         }
 
         function navigateYear(delta) {
@@ -2077,12 +2103,19 @@
         function toggleCalendarDate(dateISO) {
             const selections = getLeaveCalendarSelections();
             const previous = selections[dateISO];
-            const next = previous === calendarMarkMode ? null : calendarMarkMode;
+            const next = previous === 'annual' ? null : 'annual';
 
             let used = Number(document.getElementById('input-used-leaves').value) || 0;
 
             if (previous === 'annual') used = Math.max(0, used - 1);
             if (next === 'annual') used += 1;
+
+            if (previous === 'holiday') {
+                // Release the holiday ID tracking if removing a holiday mark via click
+                const usedHolidayIds = readJSON('calendar_used_holiday_ids', {});
+                delete usedHolidayIds[dateISO];
+                storage.setItem('calendar_used_holiday_ids', JSON.stringify(usedHolidayIds));
+            }
 
             if (next) {
                 selections[dateISO] = next;
@@ -2096,6 +2129,7 @@
 
             calculateRemainingLeaves();
             renderDynamicCalendar();
+            loadHolidayHistory();
         }
 
         function loadYearLeaveData() {
@@ -2144,14 +2178,6 @@
             event.dataTransfer.effectAllowed = 'copyMove';
         }
 
-        function handleTokenDragStart(event) {
-            event.dataTransfer.setData('text/plain', JSON.stringify({
-                type: 'bank_holiday',
-                name: 'Bank Holiday'
-            }));
-            event.dataTransfer.effectAllowed = 'copyMove';
-        }
-
         function handleDayDragOver(event) {
             if (Array.from(event.dataTransfer.types || []).includes('Files')) return;
 
@@ -2180,6 +2206,15 @@
                 const data = JSON.parse(raw);
                 if (data.type !== 'bank_holiday') return;
 
+                const usedHolidayIds = readJSON('calendar_used_holiday_ids', {});
+
+                // Prevent placing the exact same in-lieu bank holiday twice
+                const alreadyUsedDate = Object.entries(usedHolidayIds).find(([d, hid]) => hid === data.id);
+                if (alreadyUsedDate && alreadyUsedDate[0] !== dateISO) {
+                    showToast(`"${data.name}" is already placed on ${alreadyUsedDate[0]}. Remove it from there first to move it.`, 'error');
+                    return;
+                }
+
                 const selections = getLeaveCalendarSelections();
                 let used = Number(document.getElementById('input-used-leaves').value) || 0;
 
@@ -2187,14 +2222,23 @@
                     used = Math.max(0, used - 1);
                 }
 
+                // If this date previously held a different holiday item, release it
+                if (usedHolidayIds[dateISO] && usedHolidayIds[dateISO] !== data.id) {
+                    // old one removed
+                }
+
                 selections[dateISO] = 'holiday';
                 saveLeaveCalendarSelections(selections);
+
+                usedHolidayIds[dateISO] = data.id;
+                storage.setItem('calendar_used_holiday_ids', JSON.stringify(usedHolidayIds));
 
                 document.getElementById('input-used-leaves').value = used;
                 storage.setItem(`annual_leave_used_${selectedCalendarYear}`, used);
 
                 calculateRemainingLeaves();
                 renderDynamicCalendar();
+                loadHolidayHistory();
 
                 showToast(`Used Bank Holiday (${data.name || 'Holiday'}) on ${dateISO}.`, 'success');
             } catch {
@@ -2277,19 +2321,25 @@
 
             openConfirm(`Reset all marked calendar leave and used days for ${year}?`, () => {
                 const selections = getLeaveCalendarSelections();
+                const usedHolidayIds = readJSON('calendar_used_holiday_ids', {});
                 const prefix = `${year}-`;
 
                 Object.keys(selections).forEach(date => {
-                    if (date.startsWith(prefix)) delete selections[date];
+                    if (date.startsWith(prefix)) {
+                        delete selections[date];
+                        delete usedHolidayIds[date];
+                    }
                 });
 
                 saveLeaveCalendarSelections(selections);
+                storage.setItem('calendar_used_holiday_ids', JSON.stringify(usedHolidayIds));
                 storage.setItem(`annual_leave_used_${year}`, 0);
 
                 if (selectedCalendarYear === year) {
                     document.getElementById('input-used-leaves').value = 0;
                     calculateRemainingLeaves();
                     renderDynamicCalendar();
+                    loadHolidayHistory();
                 }
 
                 showToast(`Calendar marks reset for ${year}.`, 'info');
@@ -2447,7 +2497,6 @@
                 document.getElementById('storage-notice').classList.remove('hidden');
             }
 
-            // Set initial active state correctly for the swapped tabs
             document.getElementById('tab-holiday').className = 'px-4 py-2 text-sm font-semibold rounded-xl bg-brand-600 text-white transition';
             document.getElementById('tab-flexi').className = 'px-4 py-2 text-sm font-semibold rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition';
             document.getElementById('view-holiday').classList.remove('hidden');
